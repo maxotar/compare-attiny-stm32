@@ -111,7 +111,6 @@ The implementation uses an 8-second watchdog timeout. The watchdog:
 - Provides system reliability without affecting low-power operation
 
 ## Debouncing
-## Debouncing
 Software debouncing with 50ms delay provides snappy, responsive button feedback. The millisecond counter tracks approximate time for accurate debouncing independent of BPM settings.
 
 ## Customization
@@ -119,7 +118,7 @@ Software debouncing with 50ms delay provides snappy, responsive button feedback.
 - Modify `BUTTON_*_PIN` definitions to change button pins
 - Adjust `BPM_MIN`, `BPM_MAX`, `BPM_DEFAULT`, and `BPM_STEP` for different BPM range and step size
 - Adjust `ACTIVATION_DURATION_MS` for different pulse width
-- Adjust `DEBOUNCE_DELAY` for different debounce sensitivity (in RTC periods)
+- Adjust `DEBOUNCE_DELAY_MS` for different debounce sensitivity
 
 ## How It Works
 1. System starts at default BPM (100)
