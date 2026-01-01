@@ -131,16 +131,30 @@ void activate_output() {
     PORTA.OUTCLR = OUTPUT_PIN;  // Set pin low
 }
 
-// Enter sleep mode
+// Enter ultra-low power sleep mode (~1-2µA current consumption)
+// This function puts the ATTiny1616 into Power-Down mode, the deepest sleep state.
+// 
+// Sleep mode behavior:
+//   - CPU is stopped
+//   - All peripherals are disabled EXCEPT:
+//     * RTC (configured with RUNSTDBY to wake periodically)
+//     * Watchdog Timer (WDT)
+//     * Pin-change interrupts (for buttons)
+//   - Execution resumes when an interrupt occurs (RTC overflow or button press)
+//
+// Wake-up sources:
+//   - RTC overflow interrupt (periodic, based on BPM setting)
+//   - Button press interrupts (PORTB pin changes)
+//   - Watchdog timer timeout (system recovery)
 void enter_sleep() {
-    // Reset watchdog before sleeping
-    wdt_reset();
+    wdt_reset();  // Reset watchdog timer to prevent timeout during sleep
     
-    set_sleep_mode(SLEEP_MODE_PWR_DOWN);
-    sleep_enable();
-    sei();  // Enable interrupts
-    sleep_cpu();
-    sleep_disable();
+    set_sleep_mode(SLEEP_MODE_PWR_DOWN);  // Configure deepest sleep mode
+    sleep_enable();                        // Set Sleep Enable bit in MCU control register
+    sei();                                 // Ensure global interrupts are enabled (required for wake-up)
+    sleep_cpu();                          // Execute SLEEP instruction - MCU enters sleep HERE
+                                          // *** Execution pauses at this point until wake-up interrupt ***
+    sleep_disable();                      // Clear Sleep Enable bit after wake-up (safety/best practice)
 }
 
 // RTC overflow interrupt - triggers based on BPM setting
