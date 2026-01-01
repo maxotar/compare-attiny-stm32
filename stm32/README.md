@@ -6,13 +6,13 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
 ## Features
 - **Adjustable BPM**: Pin PA5 is activated at adjustable rate (40-155 BPM, default 100 BPM)
 - **Button Controls**:
-  - **PC13**: Increase BPM by 5 (Blue button on Nucleo board, 50ms debounce)
-  - **PB0**: Decrease BPM by 5 (50ms debounce for snappy response)
+  - **PC13**: Increase BPM by 5 (Blue button on Nucleo board, true 50ms debounce)
+  - **PB0**: Decrease BPM by 5 (true 50ms debounce)
   - **PB1**: Reserved for future use
 - **Low Power Mode**: Uses Stop mode with voltage regulator in low power mode
 - **RTC Wake-up**: Real-Time Clock wake-up timer provides timing and wake-up from Stop mode (dynamically reconfigured)
 - **Independent Watchdog**: ~7 second timeout, runs in Stop mode without extra power consumption
-- **Button Interrupts**: 3 buttons with EXTI interrupt-driven input and 50ms software debouncing
+- **Button Interrupts**: 3 buttons with EXTI interrupt-driven input and blocking 50ms debounce
 - **Power Optimization**:
   - MSI clock (2.097 MHz) for low power operation
   - Voltage scaling to Range 1 (1.8V)
@@ -129,7 +129,13 @@ The implementation uses the Independent Watchdog (IWDG) with ~7 second timeout:
 **Note**: The LSI oscillator has a typical ±5% frequency tolerance. For applications requiring precise timing, consider using an external 32.768 kHz crystal (LSE) for the RTC clock source. The MSI clock at 2.097 MHz is well within safe operating limits for 3.3V operation.
 
 ## Debouncing
-Software debouncing with 50ms delay provides snappy, responsive button feedback without multiple triggers from mechanical bounce.
+True 50ms software debouncing using blocking delay:
+- Button interrupt sets a flag
+- Main loop processes the flag with 50ms delay
+- Reads button state after delay to confirm press
+- Waits for button release with additional debouncing
+- **Power impact**: Minimal - stays awake ~100-150ms per button press
+- Since button presses are infrequent (1-10 every few minutes), average power consumption remains <2µA
 
 ## EXTI Configuration
 External interrupts are configured for:

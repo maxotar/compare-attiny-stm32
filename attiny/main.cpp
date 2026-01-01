@@ -6,8 +6,12 @@
  * - Button controls: PB0=Increase BPM, PB1=Decrease BPM (±5 BPM steps)
  * - Low power sleep mode between activations
  * - RTC for wake-up timing (dynamically reconfigured)
- * - 3 button inputs with interrupt and 50ms debouncing for snappy response
+ * - 3 button inputs with interrupt and proper 50ms blocking debounce
  * - Watchdog timer (8s timeout) for system reliability without affecting sleep
+ * 
+ * Debouncing: Uses blocking delay approach - stays awake for 50ms after button press
+ * to properly debounce. Since button presses are infrequent (1-10 every few minutes),
+ * this has minimal impact on average power consumption.
  * 
  * 50ms Output Pulse: Uses blocking _delay_ms() during activation. This approach
  * is more power efficient than keeping a timer running during sleep. The brief
@@ -40,16 +44,17 @@ volatile uint16_t current_bpm = BPM_DEFAULT;
 volatile uint16_t activation_period_ms = 60000 / BPM_DEFAULT;  // Calculate period from BPM
 #define ACTIVATION_DURATION_MS 50 // Active for 50ms
 
-// Debouncing - using millisecond counter for precise 50ms debounce
+// Debouncing - using blocking delay for true 50ms debounce
 #define DEBOUNCE_DELAY_MS 50  // 50ms debounce for snappy response
-volatile uint32_t button_inc_last_interrupt_time = 0;
-volatile uint32_t button_dec_last_interrupt_time = 0;
-volatile uint32_t button3_last_interrupt_time = 0;
 
 volatile bool activation_flag = false;
 volatile uint32_t rtc_counter = 0;  // Counts RTC periods
-volatile uint32_t millis_counter = 0;  // Approximate millisecond counter for debouncing
 volatile bool reconfigure_rtc = false;
+
+// Button press flags set by ISR, processed in main loop
+volatile bool button_inc_pressed = false;
+volatile bool button_dec_pressed = false;
+volatile bool button3_pressed = false;
 
 // Calculate RTC period based on BPM
 uint16_t calculate_rtc_period(uint16_t bpm) {
@@ -137,54 +142,86 @@ ISR(RTC_CNT_vect) {
     RTC.INTFLAGS = RTC_OVF_bm;  // Clear interrupt flag
     activation_flag = true;
     rtc_counter++;
-    
-    // Update millisecond counter for debouncing
-    // Note: Counter increments by activation_period_ms (varies with BPM: 387ms@155 to 1500ms@40)
-    // This makes debounce timing approximate but still effective for button presses
-    // More precise millisecond tracking would require a dedicated timer (extra power/complexity)
-    millis_counter += activation_period_ms;
 }
 
-// Button interrupt handler
+// Button interrupt handler - sets flags for main loop processing
 ISR(PORTB_PORT_vect) {
     uint8_t flags = PORTB.INTFLAGS;
     PORTB.INTFLAGS = flags;  // Clear interrupt flags
     
-    uint32_t current_time = millis_counter;
+    // Set flags for button presses - actual debouncing and processing in main loop
+    if (flags & BUTTON_INC_PIN) {
+        button_inc_pressed = true;
+    }
     
-    // Button Increase BPM (PB0) - 50ms debounce for snappy response
-    if ((flags & BUTTON_INC_PIN) && 
-        (current_time - button_inc_last_interrupt_time > DEBOUNCE_DELAY_MS)) {
-        button_inc_last_interrupt_time = current_time;
+    if (flags & BUTTON_DEC_PIN) {
+        button_dec_pressed = true;
+    }
+    
+    if (flags & BUTTON3_PIN) {
+        button3_pressed = true;
+    }
+}
+
+// Process button press with proper debouncing
+// Stays awake for 50ms to debounce - acceptable since button presses are infrequent
+void process_button_presses() {
+    if (button_inc_pressed) {
+        button_inc_pressed = false;
+        _delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
         
-        if (current_bpm < BPM_MAX) {
-            current_bpm += BPM_STEP;
-            if (current_bpm > BPM_MAX) {
-                current_bpm = BPM_MAX;
+        // Check if button still pressed after debounce
+        if (!(PORTB.IN & BUTTON_INC_PIN)) {  // Active low
+            if (current_bpm < BPM_MAX) {
+                current_bpm += BPM_STEP;
+                if (current_bpm > BPM_MAX) {
+                    current_bpm = BPM_MAX;
+                }
+                reconfigure_rtc = true;
             }
-            reconfigure_rtc = true;
+            // Wait for button release
+            while (!(PORTB.IN & BUTTON_INC_PIN)) {
+                _delay_ms(10);
+            }
+            _delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
         }
     }
     
-    // Button Decrease BPM (PB1) - 50ms debounce for snappy response
-    if ((flags & BUTTON_DEC_PIN) && 
-        (current_time - button_dec_last_interrupt_time > DEBOUNCE_DELAY_MS)) {
-        button_dec_last_interrupt_time = current_time;
+    if (button_dec_pressed) {
+        button_dec_pressed = false;
+        _delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
         
-        if (current_bpm > BPM_MIN) {
-            current_bpm -= BPM_STEP;
-            if (current_bpm < BPM_MIN) {
-                current_bpm = BPM_MIN;
+        // Check if button still pressed after debounce
+        if (!(PORTB.IN & BUTTON_DEC_PIN)) {  // Active low
+            if (current_bpm > BPM_MIN) {
+                current_bpm -= BPM_STEP;
+                if (current_bpm < BPM_MIN) {
+                    current_bpm = BPM_MIN;
+                }
+                reconfigure_rtc = true;
             }
-            reconfigure_rtc = true;
+            // Wait for button release
+            while (!(PORTB.IN & BUTTON_DEC_PIN)) {
+                _delay_ms(10);
+            }
+            _delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
         }
     }
     
-    // Button 3 (PB2) - Reserved for future use
-    if ((flags & BUTTON3_PIN) && 
-        (current_time - button3_last_interrupt_time > DEBOUNCE_DELAY_MS)) {
-        button3_last_interrupt_time = current_time;
-        // Reserved for future functionality
+    if (button3_pressed) {
+        button3_pressed = false;
+        _delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
+        
+        // Check if button still pressed after debounce
+        if (!(PORTB.IN & BUTTON3_PIN)) {  // Active low
+            // Reserved for future functionality
+            
+            // Wait for button release
+            while (!(PORTB.IN & BUTTON3_PIN)) {
+                _delay_ms(10);
+            }
+            _delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
+        }
     }
 }
 
@@ -213,6 +250,9 @@ int main(void) {
     while (1) {
         // Reset watchdog timer
         wdt_reset();
+        
+        // Process any pending button presses with proper debouncing
+        process_button_presses();
         
         // Update RTC period if BPM changed
         if (reconfigure_rtc) {

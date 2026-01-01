@@ -6,8 +6,12 @@
  * - Button controls: PC13=Increase BPM, PB0=Decrease BPM (±5 BPM steps)
  * - Low power stop mode between activations
  * - RTC for wake-up timing (dynamically reconfigured)
- * - 3 button inputs with EXTI interrupt and 50ms debouncing for snappy response
+ * - 3 button inputs with EXTI interrupt and proper 50ms blocking debounce
  * - Independent Watchdog (IWDG) for system reliability, runs in Stop mode without extra power
+ * 
+ * Debouncing: Uses blocking delay approach - stays awake for 50ms after button press
+ * to properly debounce. Since button presses are infrequent (1-10 every few minutes),
+ * this has minimal impact on average power consumption.
  * 
  * 50ms Output Pulse: Uses blocking delay during activation. This approach is more
  * power efficient than running a timer during sleep. The IWDG continues running
@@ -47,10 +51,12 @@ volatile uint16_t activation_period_ms = 60000 / BPM_DEFAULT;  // Calculate peri
 volatile bool activation_flag = false;
 volatile uint32_t millis_counter = 0;  // Approximate millisecond counter
 volatile uint32_t last_activation_time = 0;  // Track last activation
-volatile uint32_t button_inc_last_interrupt_time = 0;
-volatile uint32_t button_dec_last_interrupt_time = 0;
-volatile uint32_t button3_last_interrupt_time = 0;
 volatile bool reconfigure_rtc = false;
+
+// Button press flags set by ISR, processed in main loop
+volatile bool button_inc_pressed = false;
+volatile bool button_dec_pressed = false;
+volatile bool button3_pressed = false;
 
 // System Clock Configuration
 void SystemClock_Config(void) {
@@ -330,33 +336,16 @@ extern "C" void RTC_IRQHandler(void) {
 
 // EXTI0-1 interrupt handler (Button Decrease BPM and Button 3)
 extern "C" void EXTI0_1_IRQHandler(void) {
-    uint32_t current_time = millis_counter;
-    
     // Button Decrease BPM on PB0 (EXTI0)
     if (EXTI->PR & EXTI_PR_PIF0) {
         EXTI->PR |= EXTI_PR_PIF0;  // Clear interrupt flag
-        
-        if (current_time - button_dec_last_interrupt_time > DEBOUNCE_DELAY_MS) {
-            button_dec_last_interrupt_time = current_time;
-            
-            if (current_bpm > BPM_MIN) {
-                current_bpm -= BPM_STEP;
-                if (current_bpm < BPM_MIN) {
-                    current_bpm = BPM_MIN;
-                }
-                reconfigure_rtc = true;
-            }
-        }
+        button_dec_pressed = true;
     }
     
     // Button 3 on PB1 (EXTI1) - Reserved
     if (EXTI->PR & EXTI_PR_PIF1) {
         EXTI->PR |= EXTI_PR_PIF1;  // Clear interrupt flag
-        
-        if (current_time - button3_last_interrupt_time > DEBOUNCE_DELAY_MS) {
-            button3_last_interrupt_time = current_time;
-            // Reserved for future functionality
-        }
+        button3_pressed = true;
     }
 }
 
@@ -365,11 +354,19 @@ extern "C" void EXTI4_15_IRQHandler(void) {
     // Button Increase BPM on PC13 (EXTI13)
     if (EXTI->PR & EXTI_PR_PIF13) {
         EXTI->PR |= EXTI_PR_PIF13;  // Clear interrupt flag
+        button_inc_pressed = true;
+    }
+}
+
+// Process button press with proper debouncing
+// Stays awake for 50ms to debounce - acceptable since button presses are infrequent
+void process_button_presses() {
+    if (button_inc_pressed) {
+        button_inc_pressed = false;
+        delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
         
-        uint32_t current_time = millis_counter;
-        if (current_time - button_inc_last_interrupt_time > DEBOUNCE_DELAY_MS) {
-            button_inc_last_interrupt_time = current_time;
-            
+        // Check if button still pressed after debounce (active low with pull-up)
+        if (!(GPIOC->IDR & (1U << 13))) {
             if (current_bpm < BPM_MAX) {
                 current_bpm += BPM_STEP;
                 if (current_bpm > BPM_MAX) {
@@ -377,6 +374,48 @@ extern "C" void EXTI4_15_IRQHandler(void) {
                 }
                 reconfigure_rtc = true;
             }
+            // Wait for button release
+            while (!(GPIOC->IDR & (1U << 13))) {
+                delay_ms(10);
+            }
+            delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
+        }
+    }
+    
+    if (button_dec_pressed) {
+        button_dec_pressed = false;
+        delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
+        
+        // Check if button still pressed after debounce (active low with pull-up)
+        if (!(GPIOB->IDR & (1U << 0))) {
+            if (current_bpm > BPM_MIN) {
+                current_bpm -= BPM_STEP;
+                if (current_bpm < BPM_MIN) {
+                    current_bpm = BPM_MIN;
+                }
+                reconfigure_rtc = true;
+            }
+            // Wait for button release
+            while (!(GPIOB->IDR & (1U << 0))) {
+                delay_ms(10);
+            }
+            delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
+        }
+    }
+    
+    if (button3_pressed) {
+        button3_pressed = false;
+        delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
+        
+        // Check if button still pressed after debounce (active low with pull-up)
+        if (!(GPIOB->IDR & (1U << 1))) {
+            // Reserved for future functionality
+            
+            // Wait for button release
+            while (!(GPIOB->IDR & (1U << 1))) {
+                delay_ms(10);
+            }
+            delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
         }
     }
 }
@@ -402,6 +441,9 @@ int main(void) {
     while (1) {
         // Reload watchdog timer
         IWDG->KR = 0xAAAA;
+        
+        // Process any pending button presses with proper debouncing
+        process_button_presses();
         
         // Update RTC wake-up timer if BPM changed
         if (reconfigure_rtc) {

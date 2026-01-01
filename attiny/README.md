@@ -6,13 +6,13 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
 ## Features
 - **Adjustable BPM**: Pin PA3 is activated at adjustable rate (40-155 BPM, default 100 BPM)
 - **Button Controls**: 
-  - **PB0**: Increase BPM by 5 (50ms debounce for snappy response)
-  - **PB1**: Decrease BPM by 5 (50ms debounce for snappy response)
+  - **PB0**: Increase BPM by 5 (true 50ms debounce)
+  - **PB1**: Decrease BPM by 5 (true 50ms debounce)
   - **PB2**: Reserved for future use
 - **Low Power Mode**: Uses Power-Down sleep mode between activations
 - **RTC Wake-up**: Real-Time Counter (RTC) provides precise timing and wake-up (dynamically reconfigured)
 - **Watchdog Timer**: 8-second timeout for system reliability, runs in all sleep modes without extra power
-- **Button Interrupts**: 3 buttons with interrupt-driven input and 50ms software debouncing
+- **Button Interrupts**: 3 buttons with interrupt-driven input and blocking 50ms debounce
 - **Power Optimization**: 
   - ADC disabled
   - Analog Comparator disabled
@@ -111,7 +111,13 @@ The implementation uses an 8-second watchdog timeout. The watchdog:
 - Provides system reliability without affecting low-power operation
 
 ## Debouncing
-Software debouncing with 50ms delay provides snappy, responsive button feedback. The millisecond counter tracks approximate time (increments vary with BPM from 387ms to 1500ms) but is still effective for button debouncing. For extremely precise debouncing, a dedicated millisecond timer could be added at the cost of additional complexity and power.
+True 50ms software debouncing using blocking delay:
+- Button interrupt sets a flag
+- Main loop processes the flag with 50ms delay
+- Reads button state after delay to confirm press
+- Waits for button release with additional debouncing
+- **Power impact**: Minimal - stays awake ~100-150ms per button press
+- Since button presses are infrequent (1-10 every few minutes), average power consumption remains <2µA
 
 ## Customization
 - Modify `OUTPUT_PIN` to change the output pin
