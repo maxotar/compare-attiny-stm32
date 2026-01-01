@@ -3,6 +3,42 @@
 ## Overview
 This implementation provides a low-power adjustable BPM (beats per minute) pin activation system for the ATTiny1616 microcontroller.
 
+## Why No Arduino Framework?
+
+This project uses **bare-metal AVR programming** (no Arduino framework). Here's why:
+
+### Technical Reasons
+1. **No Arduino Core for ATTiny1616**: The modern tinyAVR 1-series (including ATTiny1616) doesn't have official Arduino support. Third-party cores exist (megaTinyCore) but add complexity and overhead.
+
+2. **Ultra-Low Power**: Direct register access enables:
+   - Precise control over all power-saving features
+   - No hidden background tasks consuming power
+   - True Power-Down mode with <2µA sleep current
+   - Arduino abstractions would prevent deep sleep modes or cause unexpected wake-ups
+
+3. **Code Size**: 
+   - Bare metal: ~240 lines, minimal flash usage
+   - Arduino equivalent: Would require significantly more flash for framework overhead
+   - Important for chips with limited resources (16KB flash on ATTiny1616)
+
+4. **Precise RTC Control**:
+   - Dynamic RTC reconfiguration when BPM changes
+   - Direct crystal/oscillator selection
+   - Arduino timing functions (`millis()`, `delay()`) would interfere with low-power operation
+
+### Learning Benefits
+- **Understanding AVR hardware**: Direct experience with registers, interrupts, and peripherals
+- **Portable skills**: Knowledge applies to any AVR chip, not just Arduino boards
+- **Professional development**: Commercial low-power designs rarely use Arduino
+
+### What You Get
+- Full control over every aspect of the hardware
+- Predictable, deterministic behavior
+- Maximum code efficiency and minimum power consumption
+- Deep understanding of how the microcontroller works
+
+**Arduino is great for**: Rapid prototyping, beginners, and projects where power >1mA is acceptable. For ultra-low-power embedded systems, bare metal is the industry standard.
+
 ## Features
 - **Adjustable BPM**: Pin PA3 is activated at adjustable rate (40-155 BPM, default 100 BPM)
 - **Button Controls**: 

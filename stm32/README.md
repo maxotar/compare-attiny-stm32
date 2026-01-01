@@ -3,6 +3,59 @@
 ## Overview
 This implementation provides a low-power adjustable BPM (beats per minute) pin activation system for the STM32L0 series microcontroller (tested with STM32L053R8).
 
+## Why CMSIS Instead of Arduino?
+
+This project uses **CMSIS (Cortex Microcontroller Software Interface Standard)** for direct register access, not Arduino framework. Here's why:
+
+### Technical Reasons
+1. **Ultra-Low Power Requirements**:
+   - CMSIS allows precise control over Stop mode, voltage scaling, and clock configurations
+   - Arduino framework has background tasks that prevent achieving <2µA sleep current
+   - No hidden interrupts or peripherals consuming power
+
+2. **Advanced Power Management**:
+   - Direct control over RCC (Reset and Clock Control)
+   - Voltage scaling configuration (Range 1)
+   - Stop mode with LP voltage regulator
+   - Arduino abstractions hide these critical low-power features
+
+3. **Dynamic RTC Reconfiguration**:
+   - RTC wake-up timer reconfigured dynamically when BPM changes
+   - External crystal (LSE) configuration for precise timing
+   - Arduino's timing model doesn't support these advanced features
+
+4. **Code Efficiency**:
+   - CMSIS: ~430 lines with full control
+   - Arduino HAL/framework: Would add megabytes of unnecessary code
+   - Direct register access produces optimal assembly code
+
+### CMSIS Benefits
+- **Industry Standard**: ARM's official interface for Cortex-M chips
+- **Portable**: Works on ANY STM32 (and other ARM Cortex-M chips)
+- **Minimal Overhead**: Just register definitions and startup code
+- **Professional**: Used in commercial products and professional development
+- **Documentation**: Full ST reference manuals apply directly to the code
+
+### What About STM32duino?
+STM32duino (Arduino core for STM32) is excellent for:
+- Learning and rapid prototyping
+- Projects where milliseconds and milliamps don't matter
+- Using Arduino libraries
+
+But for this ultra-low-power application:
+- ❌ Can't achieve <2µA sleep current with Arduino overhead
+- ❌ Limited control over advanced power modes
+- ❌ Framework abstractions hide critical hardware features
+- ❌ Much larger code size
+
+### Learning Value
+- **Real-world skills**: Professional STM32 development uses CMSIS/HAL, not Arduino
+- **Deep understanding**: Learn how ARM Cortex-M peripherals actually work
+- **Transferable knowledge**: Skills apply to any ARM Cortex-M microcontroller
+- **Reading datasheets**: Code maps directly to ST reference manual registers
+
+**Arduino is great for**: Quick projects, learning basics, hobby applications. For ultra-low-power embedded systems requiring <2µA sleep, CMSIS bare metal is the right choice.
+
 ## Features
 - **Adjustable BPM**: Pin PA5 is activated at adjustable rate (40-155 BPM, default 100 BPM)
 - **Button Controls**:

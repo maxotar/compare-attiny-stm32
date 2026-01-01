@@ -36,6 +36,36 @@ Both implementations provide:
 └── README.md            # This file
 ```
 
+## Why No Arduino Framework?
+
+Both implementations use **bare-metal programming** (no Arduino framework) for several important reasons:
+
+### Ultra-Low Power Requirements
+- **Arduino overhead**: The Arduino framework includes background processing, startup code, and abstraction layers that consume extra power
+- **Bare metal advantage**: Direct register access and precise control over every peripheral allows achieving true <2µA sleep current
+- **No hidden wake-ups**: Arduino's framework can cause unexpected wake-ups or prevent deep sleep modes
+
+### Precise Timing Control
+- **RTC mastery**: Direct RTC configuration allows dynamic reconfiguration when BPM changes, something Arduino abstractions make difficult
+- **No timing interference**: Arduino's `millis()` and other timing functions require interrupts that would interfere with low-power operation
+- **Crystal support**: Direct control over clock sources enables external crystal configuration for ±20 ppm accuracy
+
+### Code Size and Efficiency
+- **Minimal footprint**: Bare metal code uses only what's needed (ATTiny: ~240 LOC, STM32: ~430 LOC)
+- **No library bloat**: Arduino libraries add significant flash overhead, limiting what fits on smaller chips
+- **Full optimization**: Direct register access allows compiler to optimize aggressively
+
+### Educational Value
+- **Understanding hardware**: Working directly with registers teaches how microcontrollers actually work
+- **Portable knowledge**: Skills transfer to any AVR or ARM Cortex-M chip, not just Arduino-supported boards
+- **Professional practice**: Most commercial ultra-low-power designs use bare metal or lightweight RTOS, not Arduino
+
+### Platform Differences
+- **ATTiny1616**: No official Arduino core exists, so bare metal is the standard approach
+- **STM32L0**: Uses CMSIS (ARM's standard) which provides register definitions without Arduino's abstraction overhead
+
+**When Arduino makes sense**: For rapid prototyping, learning basics, or projects where power consumption >1mA is acceptable, Arduino is excellent. For this ultra-low-power comparison project, bare metal is the right choice.
+
 ## Key Differences
 
 ### Architecture
