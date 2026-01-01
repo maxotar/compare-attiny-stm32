@@ -1,0 +1,181 @@
+# ATTiny1616 Implementation
+
+## Overview
+This implementation provides a low-power adjustable BPM (beats per minute) pin activation system for the ATTiny1616 microcontroller.
+
+## Why No Arduino Framework?
+
+This project uses **bare-metal AVR programming** (no Arduino framework). Here's why:
+
+### Technical Reasons
+1. **No Arduino Core for ATTiny1616**: The modern tinyAVR 1-series (including ATTiny1616) doesn't have official Arduino support. Third-party cores exist (megaTinyCore) but add complexity and overhead.
+
+2. **Ultra-Low Power**: Direct register access enables:
+   - Precise control over all power-saving features
+   - No hidden background tasks consuming power
+   - True Power-Down mode with <2µA sleep current
+   - Arduino abstractions would prevent deep sleep modes or cause unexpected wake-ups
+
+3. **Code Size**: 
+   - Bare metal: ~240 lines, minimal flash usage
+   - Arduino equivalent: Would require significantly more flash for framework overhead
+   - Important for chips with limited resources (16KB flash on ATTiny1616)
+
+4. **Precise RTC Control**:
+   - Dynamic RTC reconfiguration when BPM changes
+   - Direct crystal/oscillator selection
+   - Arduino timing functions (`millis()`, `delay()`) would interfere with low-power operation
+
+### Learning Benefits
+- **Understanding AVR hardware**: Direct experience with registers, interrupts, and peripherals
+- **Portable skills**: Knowledge applies to any AVR chip, not just Arduino boards
+- **Professional development**: Commercial low-power designs rarely use Arduino
+
+### What You Get
+- Full control over every aspect of the hardware
+- Predictable, deterministic behavior
+- Maximum code efficiency and minimum power consumption
+- Deep understanding of how the microcontroller works
+
+**Arduino is great for**: Rapid prototyping, beginners, and projects where power >1mA is acceptable. For ultra-low-power embedded systems, bare metal is the industry standard.
+
+## Features
+- **Adjustable BPM**: Pin PA3 is activated at adjustable rate (40-155 BPM, default 100 BPM)
+- **Button Controls**: 
+  - **PB0**: Increase BPM by 5 (true 50ms debounce)
+  - **PB1**: Decrease BPM by 5 (true 50ms debounce)
+  - **PB2**: Reserved for future use
+- **Low Power Mode**: Uses Power-Down sleep mode between activations
+- **RTC Wake-up**: Real-Time Counter (RTC) with external 32.768kHz crystal for precise timing (±20 ppm accuracy)
+- **Watchdog Timer**: 8-second timeout for system reliability, runs in all sleep modes without extra power
+- **Button Interrupts**: 3 buttons with interrupt-driven input and blocking 50ms debounce
+- **Power Optimization**: 
+  - ADC disabled
+  - Analog Comparator disabled
+  - Power-Down sleep mode (lowest power consumption)
+  - Run-standby enabled for RTC
+
+## Timing Accuracy
+- **External Crystal**: ±20 ppm typical (±0.002% accuracy)
+- **Expected BPM drift**: ±0.001 BPM at 60 BPM setting
+- **Alternative**: Internal oscillator available (±3% accuracy, ±1.8 BPM drift at 60 BPM)
+
+## 3.3V Operation
+- **Operating Voltage**: ATTiny1616 operates at 1.8V - 5.5V, fully compatible with 3.3V
+- **Brownout Detection (BOD)**: 
+  - Internal BOD is available and can be configured via fuses
+  - **Recommended Setting**: BOD level at 2.6V for reliable 3.3V operation
+  - BOD can be set using UPDI programming tools (e.g., pymcuprog, avrdude)
+  - Protects against unstable operation during power supply fluctuations
+
+## Hardware Configuration
+
+### External Crystal (Required)
+- **32.768kHz Crystal**: Connected to TOSC1/TOSC2 pins (PA0/PA1)
+- **Load Capacitors**: Typically 12-22pF on each crystal pin to ground
+- **Purpose**: Provides precise timing with ±20 ppm typical accuracy
+- **Alternative**: Internal oscillator (±3% accuracy) can be used by changing `RTC_CLKSEL_TOSC32K_gc` to `RTC_CLKSEL_INT32K_gc` in code
+
+### Output Pin
+- **PA3**: Output pin for periodic activation
+
+### Button Pins (Active Low with Pull-ups)
+- **PB0**: Increase BPM button
+- **PB1**: Decrease BPM button
+- **PB2**: Reserved button (future use)
+
+## BPM Configuration
+- **Range**: 40 - 155 BPM
+- **Default**: 100 BPM
+- **Step Size**: ±5 BPM per button press
+- **Activation Duration**: 50ms high pulse per beat
+
+## Power Consumption
+The ATTiny1616 in Power-Down mode with RTC and Watchdog running:
+- Typical: ~1-2 µA
+- Active mode: Brief periods during pin activation
+- Watchdog adds negligible power consumption (<1 µA)
+
+## 50ms Output Pulse Implementation
+The 50ms output pulse uses a blocking delay (`_delay_ms()`). This approach is optimal because:
+- **Power Efficient**: Keeping a hardware timer running during sleep would consume more power than the brief 50ms wake period
+- **Simple & Reliable**: No timer configuration or interrupt handling needed
+- **RTC Continues**: The RTC continues running during the delay, maintaining accurate BPM timing
+- **Watchdog Safe**: Watchdog is serviced before and after sleep, so the 50ms delay doesn't cause issues
+
+Alternative timer-based approaches would require keeping timers active during sleep mode, increasing baseline power consumption.
+
+## Building
+
+### Build Flags Explained
+
+The `platformio.ini` file contains compiler and linker flags that optimize the code for size and performance:
+
+#### Compiler Flags
+- **`-Os`**: Optimize for size. Reduces code size while maintaining good performance, crucial for microcontrollers with limited flash memory.
+- **`-DATTINY1616`**: Defines a preprocessor macro identifying the target chip. Can be used for conditional compilation.
+- **`-ffunction-sections`**: Places each function in its own section in the object file. Enables the linker to remove unused functions.
+- **`-fdata-sections`**: Places each data variable in its own section. Enables the linker to remove unused data.
+- **`-flto`**: Enables Link-Time Optimization (LTO). Allows the compiler to optimize across translation units, resulting in smaller and faster code.
+
+#### Linker Flags
+- **`-Wl,--gc-sections`**: Instructs the linker to garbage-collect unused sections. Removes functions and data that are never referenced, significantly reducing final binary size.
+
+These flags work together to minimize flash memory usage while maintaining optimal performance for low-power operation.
+
+### Using PlatformIO
+```bash
+cd attiny
+pio run
+```
+
+### Upload
+```bash
+pio run --target upload
+```
+
+Make sure you have the correct programmer configured in `platformio.ini`. Default is serialupdi.
+
+### Configuring Brownout Detection (BOD)
+
+To set BOD level for 3.3V operation, use pymcuprog or similar:
+
+```bash
+# Set BOD to 2.6V (recommended for 3.3V operation)
+pymcuprog write -t uart -u /dev/ttyUSB0 -d attiny1616 --fuses 5:0x02
+```
+
+Or with avrdude:
+```bash
+avrdude -c serialupdi -p t1616 -U fuse5:w:0x02:m
+```
+
+## Watchdog Timer
+The implementation uses an 8-second watchdog timeout. The watchdog:
+- Runs in all sleep modes without additional power consumption
+- Automatically resets the system if the main loop hangs
+- Is serviced (reset) before each sleep cycle
+- Provides system reliability without affecting low-power operation
+
+## Debouncing
+True 50ms software debouncing using blocking delay:
+- Button interrupt sets a flag
+- Main loop processes the flag with 50ms delay
+- Reads button state after delay to confirm press
+- Waits for button release with additional debouncing
+- **Power impact**: Minimal - stays awake ~100-150ms per button press
+- Since button presses are infrequent (1-10 every few minutes), average power consumption remains <2µA
+
+## Customization
+- Modify `OUTPUT_PIN` to change the output pin
+- Modify `BUTTON_*_PIN` definitions to change button pins
+- Adjust `BPM_MIN`, `BPM_MAX`, `BPM_DEFAULT`, and `BPM_STEP` for different BPM range and step size
+- Adjust `ACTIVATION_DURATION_MS` for different pulse width
+- Adjust `DEBOUNCE_DELAY_MS` for different debounce sensitivity
+
+## How It Works
+1. System starts at default BPM (100)
+2. RTC period is calculated based on BPM: `Period = 60000ms / BPM`
+3. RTC wakes the system at each period to activate the output pin
+4. Button presses adjust BPM and dynamically reconfigure the RTC
+5. Between activations, system enters Power-Down sleep mode for minimum power consumption

@@ -1,0 +1,472 @@
+/**
+ * STM32L0 - Adjustable BPM Pin Activation with Low Power Mode
+ * 
+ * Features:
+ * - Activates a pin at adjustable BPM rate (40-155 BPM) for 50ms
+ * - Button controls: PC13=Increase BPM, PB0=Decrease BPM (±5 BPM steps)
+ * - Low power stop mode between activations
+ * - RTC for wake-up timing (dynamically reconfigured) with external 32.768kHz crystal
+ * - 3 button inputs with EXTI interrupt and proper 50ms blocking debounce
+ * - Independent Watchdog (IWDG) for system reliability, runs in Stop mode without extra power
+ * 
+ * Hardware Requirements:
+ * - External 32.768kHz crystal connected to OSC32_IN/OSC32_OUT (PC14/PC15) for precise timing
+ * - Crystal provides ±20 ppm typical accuracy vs ±5% for internal LSI oscillator
+ * 
+ * Debouncing: Uses blocking delay approach - stays awake for 50ms after button press
+ * to properly debounce. Since button presses are infrequent (1-10 every few minutes),
+ * this has minimal impact on average power consumption.
+ * 
+ * 50ms Output Pulse: Uses blocking delay during activation. This approach is more
+ * power efficient than running a timer during sleep. The IWDG continues running
+ * in Stop mode without additional power consumption.
+ * 
+ * 3.3V Operation: STM32L0 operates at 1.65-3.6V, fully compatible with 3.3V
+ * Brownout Detection: PVD (Programmable Voltage Detector) available, BOR enabled by default
+ */
+
+#include "stm32l0xx.h"
+
+// Pin configuration (adjust based on your hardware)
+#define OUTPUT_PORT GPIOA
+#define OUTPUT_PIN GPIO_PIN_5  // PA5 - Output pin
+
+#define BUTTON_INC_PORT GPIOC
+#define BUTTON_INC_PIN GPIO_PIN_13  // PC13 - Button to increase BPM
+
+#define BUTTON_DEC_PORT GPIOB
+#define BUTTON_DEC_PIN GPIO_PIN_0   // PB0 - Button to decrease BPM
+
+#define BUTTON3_PORT GPIOB
+#define BUTTON3_PIN GPIO_PIN_1   // PB1 - Button 3 (reserved)
+
+// BPM configuration
+#define BPM_MIN 40
+#define BPM_MAX 155
+#define BPM_DEFAULT 100
+#define BPM_STEP 5
+
+// Timing configuration
+volatile uint16_t current_bpm = BPM_DEFAULT;
+volatile uint16_t activation_period_ms = 60000 / BPM_DEFAULT;  // Calculate period from BPM
+#define ACTIVATION_DURATION_MS 50 // Active for 50ms
+#define DEBOUNCE_DELAY_MS 50  // 50ms debounce delay for snappy response
+
+volatile bool activation_flag = false;
+volatile uint32_t millis_counter = 0;  // Approximate millisecond counter
+volatile uint32_t last_activation_time = 0;  // Track last activation
+volatile bool reconfigure_rtc = false;
+
+// Button press flags set by ISR, processed in main loop
+volatile bool button_inc_pressed = false;
+volatile bool button_dec_pressed = false;
+volatile bool button3_pressed = false;
+
+// System Clock Configuration
+void SystemClock_Config(void) {
+    // Enable Power Control clock
+    RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+    
+    // Set voltage scale to range 1 (1.8V) for low power
+    PWR->CR |= PWR_CR_VOS_0;
+    
+    // Use MSI as system clock (2.097 MHz by default for low power)
+    RCC->CR |= RCC_CR_MSION;
+    while (!(RCC->CR & RCC_CR_MSIRDY));
+    
+    // Set MSI as system clock
+    RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_MSI;
+    while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_MSI);
+}
+
+// GPIO Initialization
+void GPIO_Init(void) {
+    // Enable GPIO clocks
+    RCC->IOPENR |= RCC_IOPENR_GPIOAEN | RCC_IOPENR_GPIOBEN | RCC_IOPENR_GPIOCEN;
+    
+    // Configure output pin (PA5)
+    GPIOA->MODER = (GPIOA->MODER & ~(3U << (5 * 2))) | (1U << (5 * 2)); // Output mode
+    GPIOA->OTYPER &= ~(1U << 5);  // Push-pull
+    GPIOA->OSPEEDR &= ~(3U << (5 * 2));  // Low speed for power saving
+    GPIOA->PUPDR &= ~(3U << (5 * 2));  // No pull-up/pull-down
+    GPIOA->ODR &= ~(1U << 5);  // Start low
+    
+    // Configure button pins as input with pull-up
+    // PC13 - Button 1
+    GPIOC->MODER &= ~(3U << (13 * 2));  // Input mode
+    GPIOC->PUPDR = (GPIOC->PUPDR & ~(3U << (13 * 2))) | (1U << (13 * 2));  // Pull-up
+    
+    // PB0 - Button 2
+    GPIOB->MODER &= ~(3U << (0 * 2));  // Input mode
+    GPIOB->PUPDR = (GPIOB->PUPDR & ~(3U << (0 * 2))) | (1U << (0 * 2));  // Pull-up
+    
+    // PB1 - Button 3
+    GPIOB->MODER &= ~(3U << (1 * 2));  // Input mode
+    GPIOB->PUPDR = (GPIOB->PUPDR & ~(3U << (1 * 2))) | (1U << (1 * 2));  // Pull-up
+}
+
+// Calculate wake-up interval based on BPM
+// Since LSI is ~37kHz with prescaler giving 1Hz, we use software timing
+// Wake up at a rate faster than needed, check in ISR
+uint16_t calculate_wakeup_interval_ms(uint16_t bpm) {
+    // Period in ms = 60000 / BPM
+    uint32_t period_ms = 60000UL / bpm;
+    
+    // For very fast BPM, wake more frequently
+    // For slower BPM, can wake less frequently
+    if (period_ms < 1000) {
+        return period_ms;  // Wake at activation rate
+    } else {
+        return 1000;  // Wake every second for slow rates
+    }
+}
+
+// RTC Configuration for periodic wake-up
+void RTC_Init(void) {
+    // Enable PWR clock
+    RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+    
+    // Enable access to RTC domain
+    PWR->CR |= PWR_CR_DBP;
+    
+    // Enable LSE (Low Speed External) 32.768kHz crystal oscillator for precise timing
+    // LSE provides ±20 ppm typical accuracy vs ±5% for LSI
+    // External crystal connected to OSC32_IN/OSC32_OUT pins (PC14/PC15)
+    RCC->CSR |= RCC_CSR_LSEON;
+    while (!(RCC->CSR & RCC_CSR_LSERDY));  // Wait for LSE to be ready
+    
+    // Select LSE as RTC clock source
+    // Note: For internal LSI (~37kHz, ±5%), use: RCC_CSR_RTCSEL_LSI
+    RCC->CSR = (RCC->CSR & ~RCC_CSR_RTCSEL) | RCC_CSR_RTCSEL_LSE;
+    
+    // Enable RTC clock
+    RCC->CSR |= RCC_CSR_RTCEN;
+    
+    // Disable RTC write protection
+    RTC->WPR = 0xCA;
+    RTC->WPR = 0x53;
+    
+    // Enter initialization mode
+    RTC->ISR |= RTC_ISR_INIT;
+    while (!(RTC->ISR & RTC_ISR_INITF));
+    
+    // Configure RTC prescaler for 32.768kHz crystal
+    // LSE = 32768 Hz, Async prescaler = 128, Sync prescaler = 256
+    // This gives exactly 1Hz RTC clock: 32768 / (128 * 256) = 1 Hz
+    RTC->PRER = 0x007F00FF;  // Async = 127 (128-1), Sync = 255 (256-1)
+    
+    // Exit initialization mode
+    RTC->ISR &= ~RTC_ISR_INIT;
+    
+    // Configure wake-up timer based on BPM
+    // Disable wake-up timer
+    RTC->CR &= ~RTC_CR_WUTE;
+    while (!(RTC->ISR & RTC_ISR_WUTWF));
+    
+    // Calculate wake interval
+    uint16_t wake_interval_ms = calculate_wakeup_interval_ms(current_bpm);
+    activation_period_ms = 60000 / current_bpm;
+    
+    // Use ck_spre (1Hz) for slower rates, or faster clock for high BPM
+    RTC->CR &= ~RTC_CR_WUCKSEL;
+    
+    if (wake_interval_ms >= 1000) {
+        // Use ck_spre (1Hz) - wake every second
+        RTC->CR |= (4 << RTC_CR_WUCKSEL_Pos);
+        RTC->WUTR = 0;  // Wake every 1 second
+    } else {
+        // Use ck_spre/16 for faster wake-up (16Hz)
+        RTC->CR |= (5 << RTC_CR_WUCKSEL_Pos);
+        // Calculate ticks: wake_interval_ms / 62.5ms (16Hz = 62.5ms per tick)
+        uint16_t ticks = (wake_interval_ms * 16) / 1000;
+        if (ticks < 1) ticks = 1;
+        RTC->WUTR = ticks - 1;
+    }
+    
+    // Enable wake-up timer interrupt
+    RTC->CR |= RTC_CR_WUTIE;
+    RTC->CR |= RTC_CR_WUTE;
+    
+    // Enable RTC write protection
+    RTC->WPR = 0xFF;
+    
+    // Enable RTC wake-up interrupt in EXTI
+    EXTI->IMR |= EXTI_IMR_IM20;  // RTC Wakeup is on EXTI line 20
+    EXTI->RTSR |= EXTI_RTSR_RT20;
+    
+    // Enable RTC wake-up interrupt in NVIC
+    NVIC_EnableIRQ(RTC_IRQn);
+}
+
+// Update RTC wake-up timer when BPM changes
+void RTC_UpdateWakeup(void) {
+    // Disable RTC write protection
+    RTC->WPR = 0xCA;
+    RTC->WPR = 0x53;
+    
+    // Disable wake-up timer
+    RTC->CR &= ~RTC_CR_WUTE;
+    while (!(RTC->ISR & RTC_ISR_WUTWF));
+    
+    // Calculate new wake interval
+    uint16_t wake_interval_ms = calculate_wakeup_interval_ms(current_bpm);
+    activation_period_ms = 60000 / current_bpm;
+    
+    // Update clock selection and timer value
+    RTC->CR &= ~RTC_CR_WUCKSEL;
+    
+    if (wake_interval_ms >= 1000) {
+        RTC->CR |= (4 << RTC_CR_WUCKSEL_Pos);
+        RTC->WUTR = 0;
+    } else {
+        RTC->CR |= (5 << RTC_CR_WUCKSEL_Pos);
+        uint16_t ticks = (wake_interval_ms * 16) / 1000;
+        if (ticks < 1) ticks = 1;
+        RTC->WUTR = ticks - 1;
+    }
+    
+    // Re-enable wake-up timer
+    RTC->CR |= RTC_CR_WUTE;
+    
+    // Enable RTC write protection
+    RTC->WPR = 0xFF;
+    
+    // Reset timing
+    last_activation_time = millis_counter;
+}
+
+// EXTI Configuration for button interrupts
+void EXTI_Init(void) {
+    // Enable SYSCFG clock
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+    
+    // Configure EXTI for PC13 (Button Increase BPM)
+    SYSCFG->EXTICR[3] = (SYSCFG->EXTICR[3] & ~SYSCFG_EXTICR4_EXTI13) | SYSCFG_EXTICR4_EXTI13_PC;
+    EXTI->IMR |= EXTI_IMR_IM13;
+    EXTI->FTSR |= EXTI_FTSR_FT13;  // Falling edge trigger
+    
+    // Configure EXTI for PB0 (Button Decrease BPM)
+    SYSCFG->EXTICR[0] = (SYSCFG->EXTICR[0] & ~SYSCFG_EXTICR1_EXTI0) | SYSCFG_EXTICR1_EXTI0_PB;
+    EXTI->IMR |= EXTI_IMR_IM0;
+    EXTI->FTSR |= EXTI_FTSR_FT0;  // Falling edge trigger
+    
+    // Configure EXTI for PB1 (Button 3 - Reserved)
+    SYSCFG->EXTICR[0] = (SYSCFG->EXTICR[0] & ~SYSCFG_EXTICR1_EXTI1) | SYSCFG_EXTICR1_EXTI1_PB;
+    EXTI->IMR |= EXTI_IMR_IM1;
+    EXTI->FTSR |= EXTI_FTSR_FT1;  // Falling edge trigger
+    
+    // Enable EXTI interrupts in NVIC
+    NVIC_EnableIRQ(EXTI0_1_IRQn);  // Handles EXTI0 and EXTI1
+    NVIC_EnableIRQ(EXTI4_15_IRQn); // Handles EXTI13
+}
+
+// Simple delay function (approximate, based on instruction cycles)
+// Note: This blocking delay keeps the MCU awake for 50ms during pin activation.
+// Using a hardware timer would require keeping the timer running during sleep,
+// which increases power consumption more than this brief wake period.
+void delay_ms(uint32_t ms) {
+    // Approximate: at 2.097 MHz, ~2000 cycles per ms
+    for (uint32_t i = 0; i < ms * 500; i++) {
+        __NOP();
+    }
+}
+
+// Activate output pin for 50ms pulse
+// Uses blocking delay - more power efficient than timer-based approach
+// since timers would need to run during sleep mode
+void activate_output(void) {
+    GPIOA->ODR |= (1U << 5);  // Set pin high
+    delay_ms(ACTIVATION_DURATION_MS);  // 50ms blocking delay
+    GPIOA->ODR &= ~(1U << 5);  // Set pin low
+}
+
+// Initialize Independent Watchdog (IWDG) for system reliability
+// IWDG continues running in Stop mode, providing protection without extra power cost
+void IWDG_Init(void) {
+    // Enable write access to IWDG registers
+    IWDG->KR = 0x5555;
+    
+    // Set prescaler to 64 (LSI ~37kHz / 64 = ~578 Hz)
+    IWDG->PR = 0x04;  // Prescaler /64
+    
+    // Set reload value for ~7 second timeout
+    // 578 Hz * 7s = 4046, use max value 4095 for ~7.1 seconds
+    IWDG->RLR = 4095;
+    
+    // Reload counter
+    IWDG->KR = 0xAAAA;
+    
+    // Start IWDG
+    IWDG->KR = 0xCCCC;
+}
+
+// Enter low power stop mode
+void enter_stop_mode(void) {
+    // Reload watchdog before sleeping
+    IWDG->KR = 0xAAAA;
+    
+    // Set voltage regulator to low power mode during stop
+    PWR->CR |= PWR_CR_LPSDSR;
+    
+    // Clear wake-up flag
+    PWR->CR |= PWR_CR_CWUF;
+    
+    // Set SLEEPDEEP bit for Stop mode
+    SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
+    
+    // Enter Stop mode
+    __WFI();
+    
+    // After wake-up, system clock needs to be reconfigured
+    SystemClock_Config();
+}
+
+// RTC Wake-up Timer interrupt handler
+extern "C" void RTC_IRQHandler(void) {
+    if (RTC->ISR & RTC_ISR_WUTF) {
+        // Clear wake-up timer flag
+        RTC->ISR &= ~RTC_ISR_WUTF;
+        
+        // Clear EXTI flag
+        EXTI->PR |= EXTI_PR_PIF20;
+        
+        // Increment millisecond counter based on wake interval
+        uint16_t wake_interval_ms = calculate_wakeup_interval_ms(current_bpm);
+        millis_counter += wake_interval_ms;
+        
+        // Check if it's time to activate based on BPM
+        if (millis_counter - last_activation_time >= activation_period_ms) {
+            last_activation_time = millis_counter;
+            activation_flag = true;
+        }
+    }
+}
+
+// EXTI0-1 interrupt handler (Button Decrease BPM and Button 3)
+extern "C" void EXTI0_1_IRQHandler(void) {
+    // Button Decrease BPM on PB0 (EXTI0)
+    if (EXTI->PR & EXTI_PR_PIF0) {
+        EXTI->PR |= EXTI_PR_PIF0;  // Clear interrupt flag
+        button_dec_pressed = true;
+    }
+    
+    // Button 3 on PB1 (EXTI1) - Reserved
+    if (EXTI->PR & EXTI_PR_PIF1) {
+        EXTI->PR |= EXTI_PR_PIF1;  // Clear interrupt flag
+        button3_pressed = true;
+    }
+}
+
+// EXTI4-15 interrupt handler (Button Increase BPM)
+extern "C" void EXTI4_15_IRQHandler(void) {
+    // Button Increase BPM on PC13 (EXTI13)
+    if (EXTI->PR & EXTI_PR_PIF13) {
+        EXTI->PR |= EXTI_PR_PIF13;  // Clear interrupt flag
+        button_inc_pressed = true;
+    }
+}
+
+// Process button press with proper debouncing
+// Stays awake for 50ms to debounce - acceptable since button presses are infrequent
+void process_button_presses() {
+    if (button_inc_pressed) {
+        button_inc_pressed = false;
+        delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
+        
+        // Check if button still pressed after debounce (active low with pull-up)
+        if (!(GPIOC->IDR & (1U << 13))) {
+            if (current_bpm < BPM_MAX) {
+                current_bpm += BPM_STEP;
+                if (current_bpm > BPM_MAX) {
+                    current_bpm = BPM_MAX;
+                }
+                reconfigure_rtc = true;
+            }
+            // Wait for button release
+            while (!(GPIOC->IDR & (1U << 13))) {
+                delay_ms(10);
+            }
+            delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
+        }
+    }
+    
+    if (button_dec_pressed) {
+        button_dec_pressed = false;
+        delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
+        
+        // Check if button still pressed after debounce (active low with pull-up)
+        if (!(GPIOB->IDR & (1U << 0))) {
+            if (current_bpm > BPM_MIN) {
+                current_bpm -= BPM_STEP;
+                if (current_bpm < BPM_MIN) {
+                    current_bpm = BPM_MIN;
+                }
+                reconfigure_rtc = true;
+            }
+            // Wait for button release
+            while (!(GPIOB->IDR & (1U << 0))) {
+                delay_ms(10);
+            }
+            delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
+        }
+    }
+    
+    if (button3_pressed) {
+        button3_pressed = false;
+        delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
+        
+        // Check if button still pressed after debounce (active low with pull-up)
+        if (!(GPIOB->IDR & (1U << 1))) {
+            // Reserved for future functionality
+            
+            // Wait for button release
+            while (!(GPIOB->IDR & (1U << 1))) {
+                delay_ms(10);
+            }
+            delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
+        }
+    }
+}
+
+int main(void) {
+    // Configure system clock for low power
+    SystemClock_Config();
+    
+    // Initialize watchdog timer for system reliability
+    // IWDG runs on LSI and continues in Stop mode without extra power consumption
+    IWDG_Init();
+    
+    // Initialize peripherals
+    GPIO_Init();
+    RTC_Init();
+    EXTI_Init();
+    
+    // Disable unused peripherals for power saving
+    // Disable debugging in low power modes
+    DBGMCU->CR = 0;
+    
+    // Main loop
+    while (1) {
+        // Reload watchdog timer
+        IWDG->KR = 0xAAAA;
+        
+        // Process any pending button presses with proper debouncing
+        process_button_presses();
+        
+        // Update RTC wake-up timer if BPM changed
+        if (reconfigure_rtc) {
+            reconfigure_rtc = false;
+            RTC_UpdateWakeup();
+        }
+        
+        if (activation_flag) {
+            activation_flag = false;
+            activate_output();
+        }
+        
+        // Enter low power stop mode
+        enter_stop_mode();
+    }
+    
+    return 0;
+}
