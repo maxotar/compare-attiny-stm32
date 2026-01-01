@@ -30,6 +30,7 @@
 #include <avr/sleep.h>
 #include <avr/wdt.h>
 #include <util/delay.h>
+#include <stdbool.h>
 
 // Pin configuration
 #define OUTPUT_PIN PIN3_bm  // PA3 - Output pin for periodic activation
@@ -52,7 +53,6 @@ volatile uint16_t activation_period_ms = 60000 / BPM_DEFAULT;  // Calculate peri
 #define DEBOUNCE_DELAY_MS 50  // 50ms debounce for snappy response
 
 volatile bool activation_flag = false;
-volatile uint32_t rtc_counter = 0;  // Counts RTC periods
 volatile bool reconfigure_rtc = false;
 
 // Button press flags set by ISR, processed in main loop
@@ -147,7 +147,6 @@ void enter_sleep() {
 ISR(RTC_CNT_vect) {
     RTC.INTFLAGS = RTC_OVF_bm;  // Clear interrupt flag
     activation_flag = true;
-    rtc_counter++;
 }
 
 // Button interrupt handler - sets flags for main loop processing
@@ -169,66 +168,62 @@ ISR(PORTB_PORT_vect) {
     }
 }
 
+// Process a single button press with proper debouncing
+// Returns true if button was successfully processed
+bool process_single_button(uint8_t pin_mask, bool* pressed_flag, void (*action)()) {
+    if (!*pressed_flag) {
+        return false;
+    }
+    
+    *pressed_flag = false;
+    _delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
+    
+    // Check if button still pressed after debounce (active low)
+    if (!(PORTB.IN & pin_mask)) {
+        if (action) {
+            action();
+        }
+        
+        // Wait for button release
+        while (!(PORTB.IN & pin_mask)) {
+            _delay_ms(10);
+        }
+        _delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
+        return true;
+    }
+    
+    return false;
+}
+
+// Button action handlers
+void button_inc_action() {
+    if (current_bpm <= BPM_MAX - BPM_STEP) {
+        current_bpm += BPM_STEP;
+    } else {
+        current_bpm = BPM_MAX;
+    }
+    reconfigure_rtc = true;
+}
+
+void button_dec_action() {
+    if (current_bpm >= BPM_MIN + BPM_STEP) {
+        current_bpm -= BPM_STEP;
+    } else {
+        current_bpm = BPM_MIN;
+    }
+    reconfigure_rtc = true;
+}
+
+void button3_action() {
+    // Reserved for future functionality
+}
+
 // Process button press with proper debouncing
 // Stays awake for 50ms to debounce - acceptable since button presses are infrequent
 void process_button_presses() {
-    if (button_inc_pressed) {
-        button_inc_pressed = false;
-        _delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
-        
-        // Check if button still pressed after debounce
-        if (!(PORTB.IN & BUTTON_INC_PIN)) {  // Active low
-            if (current_bpm < BPM_MAX) {
-                current_bpm += BPM_STEP;
-                if (current_bpm > BPM_MAX) {
-                    current_bpm = BPM_MAX;
-                }
-                reconfigure_rtc = true;
-            }
-            // Wait for button release
-            while (!(PORTB.IN & BUTTON_INC_PIN)) {
-                _delay_ms(10);
-            }
-            _delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
-        }
-    }
-    
-    if (button_dec_pressed) {
-        button_dec_pressed = false;
-        _delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
-        
-        // Check if button still pressed after debounce
-        if (!(PORTB.IN & BUTTON_DEC_PIN)) {  // Active low
-            if (current_bpm > BPM_MIN) {
-                current_bpm -= BPM_STEP;
-                if (current_bpm < BPM_MIN) {
-                    current_bpm = BPM_MIN;
-                }
-                reconfigure_rtc = true;
-            }
-            // Wait for button release
-            while (!(PORTB.IN & BUTTON_DEC_PIN)) {
-                _delay_ms(10);
-            }
-            _delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
-        }
-    }
-    
-    if (button3_pressed) {
-        button3_pressed = false;
-        _delay_ms(DEBOUNCE_DELAY_MS);  // Wait for bounce to settle
-        
-        // Check if button still pressed after debounce
-        if (!(PORTB.IN & BUTTON3_PIN)) {  // Active low
-            // Reserved for future functionality
-            
-            // Wait for button release
-            while (!(PORTB.IN & BUTTON3_PIN)) {
-                _delay_ms(10);
-            }
-            _delay_ms(DEBOUNCE_DELAY_MS);  // Debounce release
-        }
-    }
+    process_single_button(BUTTON_INC_PIN, &button_inc_pressed, button_inc_action);
+    process_single_button(BUTTON_DEC_PIN, &button_dec_pressed, button_dec_action);
+    process_single_button(BUTTON3_PIN, &button3_pressed, button3_action);
 }
 
 int main(void) {
