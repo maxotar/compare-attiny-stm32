@@ -11,11 +11,13 @@ This project demonstrates implementing the same functionality on two different m
 ## Task Specification
 
 Both implementations provide:
-- Periodic pin activation: 100 times per minute (every 600ms) for 50ms
+- Adjustable BPM pin activation: 40-155 BPM (default 100 BPM) for 50ms
 - Low power sleep mode between activations
-- Wake-up via RTC/Timer
-- 3 button inputs with interrupt handling and debouncing
-- Maximum power conservation
+- Wake-up via RTC with external 32.768kHz crystal for precise timing (±20 ppm accuracy)
+- Button controls: Increase/Decrease BPM by 5, ±5 BPM steps
+- 3 button inputs with interrupt handling and true 50ms debouncing
+- Watchdog timer for system reliability
+- Maximum power conservation (~1-2 µA sleep current)
 
 ## Directory Structure
 
@@ -45,12 +47,12 @@ Both implementations provide:
 - **STM32L0**: Stop mode with LP voltage regulator (~1-2 µA)
 
 ### Clock Configuration
-- **ATTiny1616**: Uses internal 32kHz oscillator for RTC
-- **STM32L0**: Uses LSI (~37 kHz) for RTC, MSI (2.097 MHz) for system clock
+- **ATTiny1616**: Uses external 32.768kHz crystal for RTC (±20 ppm accuracy)
+- **STM32L0**: Uses external 32.768kHz crystal (LSE) for RTC, MSI (2.097 MHz) for system clock
 
 ### Code Complexity
-- **ATTiny1616**: ~150 lines, simpler register configuration
-- **STM32L0**: ~300 lines, more complex clock and peripheral setup
+- **ATTiny1616**: ~240 lines, simpler register configuration
+- **STM32L0**: ~430 lines, more complex clock and peripheral setup
 
 ### Interrupt Handling
 - **ATTiny1616**: Port interrupts for buttons, single interrupt vector
@@ -76,12 +78,14 @@ pio run --target upload
 
 ### ATTiny1616
 - ATTiny1616 microcontroller
+- **32.768kHz crystal** with load capacitors (12-22pF) on TOSC1/TOSC2 (PA0/PA1)
 - UPDI programmer (e.g., SerialUPDI, jtag2updi)
-- 3 buttons connected to PB0, PB1, PB2 (active low)
+- 3 buttons connected to PB0, PB1, PB2 (active low with external pull-ups or internal)
 - Output load on PA3
 
 ### STM32L0
 - STM32L0 board (e.g., Nucleo-L053R8)
+- **32.768kHz crystal** with load capacitors (6-12pF) on OSC32_IN/OSC32_OUT (PC14/PC15) - often pre-installed on Nucleo boards
 - ST-Link programmer (built-in on Nucleo boards)
 - 3 buttons (PC13 is built-in on Nucleo, add PB0, PB1)
 - Output on PA5 (LED on Nucleo board)

@@ -10,7 +10,7 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
   - **PB1**: Decrease BPM by 5 (true 50ms debounce)
   - **PB2**: Reserved for future use
 - **Low Power Mode**: Uses Power-Down sleep mode between activations
-- **RTC Wake-up**: Real-Time Counter (RTC) provides precise timing and wake-up (dynamically reconfigured)
+- **RTC Wake-up**: Real-Time Counter (RTC) with external 32.768kHz crystal for precise timing (±20 ppm accuracy)
 - **Watchdog Timer**: 8-second timeout for system reliability, runs in all sleep modes without extra power
 - **Button Interrupts**: 3 buttons with interrupt-driven input and blocking 50ms debounce
 - **Power Optimization**: 
@@ -18,6 +18,11 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
   - Analog Comparator disabled
   - Power-Down sleep mode (lowest power consumption)
   - Run-standby enabled for RTC
+
+## Timing Accuracy
+- **External Crystal**: ±20 ppm typical (±0.002% accuracy)
+- **Expected BPM drift**: ±0.001 BPM at 60 BPM setting
+- **Alternative**: Internal oscillator available (±3% accuracy, ±1.8 BPM drift at 60 BPM)
 
 ## 3.3V Operation
 - **Operating Voltage**: ATTiny1616 operates at 1.8V - 5.5V, fully compatible with 3.3V
@@ -28,6 +33,12 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
   - Protects against unstable operation during power supply fluctuations
 
 ## Hardware Configuration
+
+### External Crystal (Required)
+- **32.768kHz Crystal**: Connected to TOSC1/TOSC2 pins (PA0/PA1)
+- **Load Capacitors**: Typically 12-22pF on each crystal pin to ground
+- **Purpose**: Provides precise timing with ±20 ppm typical accuracy
+- **Alternative**: Internal oscillator (±3% accuracy) can be used by changing `RTC_CLKSEL_TOSC32K_gc` to `RTC_CLKSEL_INT32K_gc` in code
 
 ### Output Pin
 - **PA3**: Output pin for periodic activation

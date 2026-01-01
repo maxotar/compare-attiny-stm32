@@ -5,9 +5,13 @@
  * - Activates a pin at adjustable BPM rate (40-155 BPM) for 50ms
  * - Button controls: PC13=Increase BPM, PB0=Decrease BPM (±5 BPM steps)
  * - Low power stop mode between activations
- * - RTC for wake-up timing (dynamically reconfigured)
+ * - RTC for wake-up timing (dynamically reconfigured) with external 32.768kHz crystal
  * - 3 button inputs with EXTI interrupt and proper 50ms blocking debounce
  * - Independent Watchdog (IWDG) for system reliability, runs in Stop mode without extra power
+ * 
+ * Hardware Requirements:
+ * - External 32.768kHz crystal connected to OSC32_IN/OSC32_OUT (PC14/PC15) for precise timing
+ * - Crystal provides ±20 ppm typical accuracy vs ±5% for internal LSI oscillator
  * 
  * Debouncing: Uses blocking delay approach - stays awake for 50ms after button press
  * to properly debounce. Since button presses are infrequent (1-10 every few minutes),
@@ -125,12 +129,15 @@ void RTC_Init(void) {
     // Enable access to RTC domain
     PWR->CR |= PWR_CR_DBP;
     
-    // Enable LSI (Low Speed Internal oscillator)
-    RCC->CSR |= RCC_CSR_LSION;
-    while (!(RCC->CSR & RCC_CSR_LSIRDY));
+    // Enable LSE (Low Speed External) 32.768kHz crystal oscillator for precise timing
+    // LSE provides ±20 ppm typical accuracy vs ±5% for LSI
+    // External crystal connected to OSC32_IN/OSC32_OUT pins (PC14/PC15)
+    RCC->CSR |= RCC_CSR_LSEON;
+    while (!(RCC->CSR & RCC_CSR_LSERDY));  // Wait for LSE to be ready
     
-    // Select LSI as RTC clock source
-    RCC->CSR = (RCC->CSR & ~RCC_CSR_RTCSEL) | RCC_CSR_RTCSEL_LSI;
+    // Select LSE as RTC clock source
+    // Note: For internal LSI (~37kHz, ±5%), use: RCC_CSR_RTCSEL_LSI
+    RCC->CSR = (RCC->CSR & ~RCC_CSR_RTCSEL) | RCC_CSR_RTCSEL_LSE;
     
     // Enable RTC clock
     RCC->CSR |= RCC_CSR_RTCEN;
@@ -143,9 +150,10 @@ void RTC_Init(void) {
     RTC->ISR |= RTC_ISR_INIT;
     while (!(RTC->ISR & RTC_ISR_INITF));
     
-    // Configure RTC prescaler
-    // LSI = ~37kHz, set prescaler for 1Hz RTC clock
-    RTC->PRER = 0x007F00FF;  // Async = 127, Sync = 255
+    // Configure RTC prescaler for 32.768kHz crystal
+    // LSE = 32768 Hz, Async prescaler = 128, Sync prescaler = 256
+    // This gives exactly 1Hz RTC clock: 32768 / (128 * 256) = 1 Hz
+    RTC->PRER = 0x007F00FF;  // Async = 127 (128-1), Sync = 255 (256-1)
     
     // Exit initialization mode
     RTC->ISR &= ~RTC_ISR_INIT;

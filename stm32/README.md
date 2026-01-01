@@ -10,7 +10,7 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
   - **PB0**: Decrease BPM by 5 (true 50ms debounce)
   - **PB1**: Reserved for future use
 - **Low Power Mode**: Uses Stop mode with voltage regulator in low power mode
-- **RTC Wake-up**: Real-Time Clock wake-up timer provides timing and wake-up from Stop mode (dynamically reconfigured)
+- **RTC Wake-up**: Real-Time Clock with external 32.768kHz crystal for precise timing (±20 ppm accuracy)
 - **Independent Watchdog**: ~7 second timeout, runs in Stop mode without extra power consumption
 - **Button Interrupts**: 3 buttons with EXTI interrupt-driven input and blocking 50ms debounce
 - **Power Optimization**:
@@ -19,6 +19,11 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
   - Stop mode with LP voltage regulator
   - Debug disabled in low power modes
   - GPIO configured for low speed
+
+## Timing Accuracy
+- **External Crystal**: ±20 ppm typical (±0.002% accuracy)
+- **Expected BPM drift**: ±0.001 BPM at 60 BPM setting
+- **Alternative**: Internal LSI oscillator available (±5% accuracy, ±3 BPM drift at 60 BPM)
 
 ## 3.3V Operation
 - **Operating Voltage**: STM32L0 operates at 1.65V - 3.6V, fully compatible with 3.3V
@@ -33,6 +38,13 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
   - Can trigger interrupt when VDD drops below configurable threshold
 
 ## Hardware Configuration
+
+### External Crystal (Required)
+- **32.768kHz Crystal**: Connected to OSC32_IN/OSC32_OUT pins (PC14/PC15)
+- **Load Capacitors**: Typically 6-12pF on each crystal pin to ground (check crystal datasheet)
+- **Purpose**: Provides precise timing with ±20 ppm typical accuracy
+- **Note**: Many Nucleo boards have the crystal pre-installed
+- **Alternative**: Internal LSI oscillator (~37kHz, ±5% accuracy) can be used by changing `RCC_CSR_RTCSEL_LSE` to `RCC_CSR_RTCSEL_LSI` in code
 
 ### Output Pin
 - **PA5**: Output pin for periodic activation (LED on Nucleo board)

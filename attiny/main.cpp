@@ -5,9 +5,13 @@
  * - Activates a pin at adjustable BPM rate (40-155 BPM) for 50ms
  * - Button controls: PB0=Increase BPM, PB1=Decrease BPM (±5 BPM steps)
  * - Low power sleep mode between activations
- * - RTC for wake-up timing (dynamically reconfigured)
+ * - RTC for wake-up timing (dynamically reconfigured) with external 32.768kHz crystal
  * - 3 button inputs with interrupt and proper 50ms blocking debounce
  * - Watchdog timer (8s timeout) for system reliability without affecting sleep
+ * 
+ * Hardware Requirements:
+ * - External 32.768kHz crystal connected to TOSC1/TOSC2 (PA0/PA1) for precise timing
+ * - Crystal provides ±20 ppm typical accuracy vs ±3% for internal oscillator
  * 
  * Debouncing: Uses blocking delay approach - stays awake for 50ms after button press
  * to properly debounce. Since button presses are infrequent (1-10 every few minutes),
@@ -70,8 +74,10 @@ void rtc_init() {
     // Disable RTC during configuration
     while (RTC.STATUS > 0);
     
-    // Select 32.768kHz external crystal or internal oscillator
-    RTC.CLKSEL = RTC_CLKSEL_INT32K_gc; // Use internal 32kHz oscillator
+    // Select 32.768kHz external crystal for precise timing (±20 ppm typical)
+    // External crystal connected to TOSC1/TOSC2 pins (PA0/PA1)
+    // For internal oscillator (±3% accuracy), use: RTC_CLKSEL_INT32K_gc
+    RTC.CLKSEL = RTC_CLKSEL_TOSC32K_gc; // Use external 32.768kHz crystal
     
     // Set period based on current BPM
     RTC.PER = calculate_rtc_period(current_bpm);
