@@ -111,7 +111,7 @@ The implementation uses an 8-second watchdog timeout. The watchdog:
 - Provides system reliability without affecting low-power operation
 
 ## Debouncing
-Software debouncing with 50ms delay provides snappy, responsive button feedback. The millisecond counter tracks approximate time for accurate debouncing independent of BPM settings.
+Software debouncing with 50ms delay provides snappy, responsive button feedback. The millisecond counter tracks approximate time (increments vary with BPM from 387ms to 1500ms) but is still effective for button debouncing. For extremely precise debouncing, a dedicated millisecond timer could be added at the cost of additional complexity and power.
 
 ## Customization
 - Modify `OUTPUT_PIN` to change the output pin

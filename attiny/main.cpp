@@ -139,7 +139,9 @@ ISR(RTC_CNT_vect) {
     rtc_counter++;
     
     // Update millisecond counter for debouncing
-    // Approximate milliseconds since this is called at BPM rate
+    // Note: Counter increments by activation_period_ms (varies with BPM: 387ms@155 to 1500ms@40)
+    // This makes debounce timing approximate but still effective for button presses
+    // More precise millisecond tracking would require a dedicated timer (extra power/complexity)
     millis_counter += activation_period_ms;
 }
 

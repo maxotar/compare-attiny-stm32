@@ -275,8 +275,8 @@ void IWDG_Init(void) {
     // Set prescaler to 64 (LSI ~37kHz / 64 = ~578 Hz)
     IWDG->PR = 0x04;  // Prescaler /64
     
-    // Set reload value for ~8 second timeout
-    // 578 Hz * 8s = 4624, but max is 4095, so use max for ~7 seconds
+    // Set reload value for ~7 second timeout
+    // 578 Hz * 7s = 4046, use max value 4095 for ~7.1 seconds
     IWDG->RLR = 4095;
     
     // Reload counter
