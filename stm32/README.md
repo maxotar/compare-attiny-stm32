@@ -55,8 +55,11 @@ The default configuration uses ST-Link programmer for Nucleo boards.
 
 ## Clock Configuration
 - **System Clock**: MSI at 2.097 MHz (low power)
-- **RTC Clock**: LSI (~37 kHz)
+- **RTC Clock**: LSI (~37 kHz ±5% tolerance)
 - **Voltage Scale**: Range 1 (1.8V)
+- **RTC Wake-up**: Approximately every 1 second, software handles 600ms activation timing
+
+**Note**: The LSI oscillator has a typical ±5% frequency tolerance. For applications requiring precise timing, consider using an external 32.768 kHz crystal (LSE) for the RTC clock source.
 
 ## Debouncing
 Software debouncing with 50ms delay prevents multiple triggers from button bouncing.

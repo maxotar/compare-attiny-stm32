@@ -30,6 +30,9 @@
 
 volatile bool activation_flag = false;
 volatile uint32_t millis_counter = 0;  // Approximate millisecond counter
+// Note: millis_counter accuracy depends on RTC wake-up frequency.
+// The wake-up interval is approximate due to LSI frequency variation (~37kHz ±5%).
+// For production, calibrate LSI or use external crystal for precise timing.
 volatile uint32_t button1_last_interrupt_time = 0;
 volatile uint32_t button2_last_interrupt_time = 0;
 volatile uint32_t button3_last_interrupt_time = 0;
@@ -119,15 +122,14 @@ void RTC_Init(void) {
     // Use RTC clock divided by 16 (ck_apre / 16)
     // With LSI at ~37kHz: 37000/128 (async prescaler) = 289 Hz
     // Then divided by 256 (sync prescaler) = 1.129 Hz
-    // For wake-up timer: use ck_spre/16 = ~0.07 Hz per tick
-    // To get 600ms (0.6s), we need approximately: 0.6 * 1.129 / 16 ≈ 0.042
-    // Better approach: use ck_spre (1Hz) and trigger more frequently
+    // For wake-up timer: use ck_spre/16 to get ~16Hz, then set WUTR for ~300ms wake
+    // Note: Exact timing depends on actual LSI frequency which can vary ±5%
     RTC->CR &= ~RTC_CR_WUCKSEL;
-    RTC->CR |= (4 << RTC_CR_WUCKSEL_Pos);  // ck_spre (1Hz) / 2 = 0.5Hz
+    RTC->CR |= (4 << RTC_CR_WUCKSEL_Pos);  // ck_spre (1Hz)
     
-    // Set counter to 0 for ~2 second period, we'll handle 600ms in software
-    // Wake up frequently (every ~0.3s with this configuration)
-    RTC->WUTR = 0;  // Shortest period for more precise timing control in ISR
+    // Wake up every second, software will handle 600ms timing
+    // WUTR = 0 means wake every (WUTR+1) cycles = 1 second
+    RTC->WUTR = 0;  // Wake approximately every second
     
     // Enable wake-up timer interrupt
     RTC->CR |= RTC_CR_WUTIE;
@@ -169,9 +171,13 @@ void EXTI_Init(void) {
     NVIC_EnableIRQ(EXTI4_15_IRQn); // Handles EXTI13
 }
 
-// Simple delay function (not power efficient, for activation only)
+// Simple delay function (approximate, based on instruction cycles)
+// Note: This is not accurate for precise timing. The actual delay depends on
+// the system clock (MSI at 2.097 MHz) and optimization level.
+// For production, use SysTick or a hardware timer for accurate delays.
 void delay_ms(uint32_t ms) {
-    for (uint32_t i = 0; i < ms * 1000; i++) {
+    // Approximate: at 2.097 MHz, ~2000 cycles per ms
+    for (uint32_t i = 0; i < ms * 500; i++) {
         __NOP();
     }
 }
@@ -210,8 +216,10 @@ extern "C" void RTC_IRQHandler(void) {
         // Clear EXTI flag
         EXTI->PR |= EXTI_PR_PIF20;
         
-        // Increment millisecond counter (approximate, adjust based on actual timing)
-        millis_counter += 300;  // Approximate ms since last wake (depends on RTC config)
+        // Increment millisecond counter
+        // With WUTR=0 and ck_spre (1Hz), we wake approximately every second
+        // This is approximate due to LSI tolerance
+        millis_counter += 1000;  // Add ~1000ms per wake-up
         
         // Check if 600ms has elapsed (approximately)
         static uint32_t last_activation_time = 0;

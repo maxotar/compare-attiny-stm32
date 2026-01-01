@@ -25,6 +25,9 @@
 
 // Debouncing
 #define DEBOUNCE_DELAY_MS 50
+// Note: millis_counter increments every 600ms, so debounce check
+// actually prevents retriggering within 50 RTC periods (~30 seconds).
+// For production, use a higher resolution timer if more precise debouncing is needed.
 volatile uint32_t button1_last_interrupt_time = 0;
 volatile uint32_t button2_last_interrupt_time = 0;
 volatile uint32_t button3_last_interrupt_time = 0;

@@ -54,6 +54,8 @@ Make sure you have the correct programmer configured in `platformio.ini`. Defaul
 ## Debouncing
 Software debouncing with 50ms delay prevents multiple triggers from button bouncing.
 
+**Note on timing**: The debounce counter uses the same RTC period counter (600ms increments), so the effective debounce period is longer than 50ms. For production applications requiring precise debouncing, consider using a separate higher-resolution timer or adjusting the debounce threshold to account for the 600ms RTC period.
+
 ## Customization
 - Modify `OUTPUT_PIN` to change the output pin
 - Modify `BUTTON*_PIN` definitions to change button pins
