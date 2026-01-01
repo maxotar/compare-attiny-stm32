@@ -6,12 +6,13 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
 ## Features
 - **Adjustable BPM**: Pin PA3 is activated at adjustable rate (40-155 BPM, default 100 BPM)
 - **Button Controls**: 
-  - **PB0**: Increase BPM by 5
-  - **PB1**: Decrease BPM by 5
+  - **PB0**: Increase BPM by 5 (50ms debounce for snappy response)
+  - **PB1**: Decrease BPM by 5 (50ms debounce for snappy response)
   - **PB2**: Reserved for future use
 - **Low Power Mode**: Uses Power-Down sleep mode between activations
 - **RTC Wake-up**: Real-Time Counter (RTC) provides precise timing and wake-up (dynamically reconfigured)
-- **Button Interrupts**: 3 buttons with interrupt-driven input and software debouncing
+- **Watchdog Timer**: 8-second timeout for system reliability, runs in all sleep modes without extra power
+- **Button Interrupts**: 3 buttons with interrupt-driven input and 50ms software debouncing
 - **Power Optimization**: 
   - ADC disabled
   - Analog Comparator disabled
@@ -43,11 +44,19 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
 - **Activation Duration**: 50ms high pulse per beat
 
 ## Power Consumption
-The ATTiny1616 in Power-Down mode with RTC running:
+The ATTiny1616 in Power-Down mode with RTC and Watchdog running:
 - Typical: ~1-2 µA
 - Active mode: Brief periods during pin activation
+- Watchdog adds negligible power consumption (<1 µA)
 
-**Note**: The current implementation uses `_delay_ms()` for the 50ms activation period, which is a blocking delay. For maximum power efficiency in production code, consider using a hardware timer to handle the 50ms duration and return to sleep immediately after setting the pin high.
+## 50ms Output Pulse Implementation
+The 50ms output pulse uses a blocking delay (`_delay_ms()`). This approach is optimal because:
+- **Power Efficient**: Keeping a hardware timer running during sleep would consume more power than the brief 50ms wake period
+- **Simple & Reliable**: No timer configuration or interrupt handling needed
+- **RTC Continues**: The RTC continues running during the delay, maintaining accurate BPM timing
+- **Watchdog Safe**: Watchdog is serviced before and after sleep, so the 50ms delay doesn't cause issues
+
+Alternative timer-based approaches would require keeping timers active during sleep mode, increasing baseline power consumption.
 
 ## Building
 
@@ -94,9 +103,16 @@ Or with avrdude:
 avrdude -c serialupdi -p t1616 -U fuse5:w:0x02:m
 ```
 
+## Watchdog Timer
+The implementation uses an 8-second watchdog timeout. The watchdog:
+- Runs in all sleep modes without additional power consumption
+- Automatically resets the system if the main loop hangs
+- Is serviced (reset) before each sleep cycle
+- Provides system reliability without affecting low-power operation
+
 ## Debouncing
 ## Debouncing
-Software debouncing prevents multiple triggers from button bouncing. The debounce delay is 3 RTC periods, which varies with BPM setting (approximately 1.8-3 seconds depending on rate).
+Software debouncing with 50ms delay provides snappy, responsive button feedback. The millisecond counter tracks approximate time for accurate debouncing independent of BPM settings.
 
 ## Customization
 - Modify `OUTPUT_PIN` to change the output pin

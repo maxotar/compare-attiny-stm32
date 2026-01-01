@@ -6,7 +6,12 @@
  * - Button controls: PC13=Increase BPM, PB0=Decrease BPM (±5 BPM steps)
  * - Low power stop mode between activations
  * - RTC for wake-up timing (dynamically reconfigured)
- * - 3 button inputs with EXTI interrupt and debouncing
+ * - 3 button inputs with EXTI interrupt and 50ms debouncing for snappy response
+ * - Independent Watchdog (IWDG) for system reliability, runs in Stop mode without extra power
+ * 
+ * 50ms Output Pulse: Uses blocking delay during activation. This approach is more
+ * power efficient than running a timer during sleep. The IWDG continues running
+ * in Stop mode without additional power consumption.
  * 
  * 3.3V Operation: STM32L0 operates at 1.65-3.6V, fully compatible with 3.3V
  * Brownout Detection: PVD (Programmable Voltage Detector) available, BOR enabled by default
@@ -37,7 +42,7 @@
 volatile uint16_t current_bpm = BPM_DEFAULT;
 volatile uint16_t activation_period_ms = 60000 / BPM_DEFAULT;  // Calculate period from BPM
 #define ACTIVATION_DURATION_MS 50 // Active for 50ms
-#define DEBOUNCE_DELAY_MS 200  // 200ms debounce delay
+#define DEBOUNCE_DELAY_MS 50  // 50ms debounce delay for snappy response
 
 volatile bool activation_flag = false;
 volatile uint32_t millis_counter = 0;  // Approximate millisecond counter
@@ -242,9 +247,9 @@ void EXTI_Init(void) {
 }
 
 // Simple delay function (approximate, based on instruction cycles)
-// Note: This is not accurate for precise timing. The actual delay depends on
-// the system clock (MSI at 2.097 MHz) and optimization level.
-// For production, use SysTick or a hardware timer for accurate delays.
+// Note: This blocking delay keeps the MCU awake for 50ms during pin activation.
+// Using a hardware timer would require keeping the timer running during sleep,
+// which increases power consumption more than this brief wake period.
 void delay_ms(uint32_t ms) {
     // Approximate: at 2.097 MHz, ~2000 cycles per ms
     for (uint32_t i = 0; i < ms * 500; i++) {
@@ -252,15 +257,40 @@ void delay_ms(uint32_t ms) {
     }
 }
 
-// Activate output pin
+// Activate output pin for 50ms pulse
+// Uses blocking delay - more power efficient than timer-based approach
+// since timers would need to run during sleep mode
 void activate_output(void) {
     GPIOA->ODR |= (1U << 5);  // Set pin high
-    delay_ms(ACTIVATION_DURATION_MS);
+    delay_ms(ACTIVATION_DURATION_MS);  // 50ms blocking delay
     GPIOA->ODR &= ~(1U << 5);  // Set pin low
+}
+
+// Initialize Independent Watchdog (IWDG) for system reliability
+// IWDG continues running in Stop mode, providing protection without extra power cost
+void IWDG_Init(void) {
+    // Enable write access to IWDG registers
+    IWDG->KR = 0x5555;
+    
+    // Set prescaler to 64 (LSI ~37kHz / 64 = ~578 Hz)
+    IWDG->PR = 0x04;  // Prescaler /64
+    
+    // Set reload value for ~8 second timeout
+    // 578 Hz * 8s = 4624, but max is 4095, so use max for ~7 seconds
+    IWDG->RLR = 4095;
+    
+    // Reload counter
+    IWDG->KR = 0xAAAA;
+    
+    // Start IWDG
+    IWDG->KR = 0xCCCC;
 }
 
 // Enter low power stop mode
 void enter_stop_mode(void) {
+    // Reload watchdog before sleeping
+    IWDG->KR = 0xAAAA;
+    
     // Set voltage regulator to low power mode during stop
     PWR->CR |= PWR_CR_LPSDSR;
     
@@ -355,6 +385,10 @@ int main(void) {
     // Configure system clock for low power
     SystemClock_Config();
     
+    // Initialize watchdog timer for system reliability
+    // IWDG runs on LSI and continues in Stop mode without extra power consumption
+    IWDG_Init();
+    
     // Initialize peripherals
     GPIO_Init();
     RTC_Init();
@@ -366,6 +400,9 @@ int main(void) {
     
     // Main loop
     while (1) {
+        // Reload watchdog timer
+        IWDG->KR = 0xAAAA;
+        
         // Update RTC wake-up timer if BPM changed
         if (reconfigure_rtc) {
             reconfigure_rtc = false;

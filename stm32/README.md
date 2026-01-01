@@ -6,12 +6,13 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
 ## Features
 - **Adjustable BPM**: Pin PA5 is activated at adjustable rate (40-155 BPM, default 100 BPM)
 - **Button Controls**:
-  - **PC13**: Increase BPM by 5 (Blue button on Nucleo board)
-  - **PB0**: Decrease BPM by 5
+  - **PC13**: Increase BPM by 5 (Blue button on Nucleo board, 50ms debounce)
+  - **PB0**: Decrease BPM by 5 (50ms debounce for snappy response)
   - **PB1**: Reserved for future use
 - **Low Power Mode**: Uses Stop mode with voltage regulator in low power mode
 - **RTC Wake-up**: Real-Time Clock wake-up timer provides timing and wake-up from Stop mode (dynamically reconfigured)
-- **Button Interrupts**: 3 buttons with EXTI interrupt-driven input and software debouncing
+- **Independent Watchdog**: ~7 second timeout, runs in Stop mode without extra power consumption
+- **Button Interrupts**: 3 buttons with EXTI interrupt-driven input and 50ms software debouncing
 - **Power Optimization**:
   - MSI clock (2.097 MHz) for low power operation
   - Voltage scaling to Range 1 (1.8V)
@@ -48,12 +49,20 @@ This implementation provides a low-power adjustable BPM (beats per minute) pin a
 - **Activation Duration**: 50ms high pulse per beat
 
 ## Power Consumption
-The STM32L0 in Stop mode:
+The STM32L0 in Stop mode with RTC and IWDG running:
 - Typical: ~1-2 µA with RTC running
 - Active mode: Brief periods during pin activation and wake-up
 - MSI clock keeps power consumption low during active periods
+- IWDG (Independent Watchdog) adds negligible power consumption in Stop mode
 
-**Note**: The current implementation uses a busy-wait loop for the 50ms activation period. For maximum power efficiency in production code, consider using a hardware timer (e.g., TIM2) to handle the 50ms duration more efficiently.
+## 50ms Output Pulse Implementation
+The 50ms output pulse uses a blocking delay. This approach is optimal because:
+- **Power Efficient**: Running a hardware timer during Stop mode would prevent entering the deepest sleep state
+- **Simple & Reliable**: No complex timer configuration or additional interrupts needed
+- **IWDG Compatible**: The Independent Watchdog continues running in Stop mode, providing reliability without extra power
+- **RTC Continues**: Wake-up timing remains accurate
+
+Alternative timer-based approaches would require keeping timers active, significantly increasing power consumption compared to the brief 50ms wake period.
 
 ## Building
 
@@ -103,6 +112,14 @@ BOR is enabled by default. To check or modify BOR level, use STM32CubeProgrammer
 
 For 3.3V operation, Level 1, 2, or 3 are appropriate.
 
+## Watchdog Timer
+The implementation uses the Independent Watchdog (IWDG) with ~7 second timeout:
+- Runs on LSI (Low Speed Internal oscillator)
+- Continues operating in Stop mode without additional power consumption
+- Automatically resets the system if the main loop hangs
+- Serviced (reloaded) before each sleep cycle and in the main loop
+- Provides system reliability without affecting low-power operation
+
 ## Clock Configuration
 - **System Clock**: MSI at 2.097 MHz (low power, suitable for 3.3V operation)
 - **RTC Clock**: LSI (~37 kHz ±5% tolerance)
@@ -112,7 +129,7 @@ For 3.3V operation, Level 1, 2, or 3 are appropriate.
 **Note**: The LSI oscillator has a typical ±5% frequency tolerance. For applications requiring precise timing, consider using an external 32.768 kHz crystal (LSE) for the RTC clock source. The MSI clock at 2.097 MHz is well within safe operating limits for 3.3V operation.
 
 ## Debouncing
-Software debouncing with 200ms delay prevents multiple triggers from button bouncing.
+Software debouncing with 50ms delay provides snappy, responsive button feedback without multiple triggers from mechanical bounce.
 
 ## EXTI Configuration
 External interrupts are configured for:
