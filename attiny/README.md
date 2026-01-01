@@ -34,6 +34,8 @@ The ATTiny1616 in Power-Down mode with RTC running:
 - Typical: ~1-2 µA
 - Active mode: Brief periods during pin activation
 
+**Note**: The current implementation uses `_delay_ms()` for the 50ms activation period, which is a blocking delay. For maximum power efficiency in production code, consider using a hardware timer to handle the 50ms duration and return to sleep immediately after setting the pin high.
+
 ## Building
 
 ### Using PlatformIO

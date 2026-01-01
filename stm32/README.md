@@ -36,6 +36,8 @@ The STM32L0 in Stop mode:
 - Active mode: Brief periods during pin activation and wake-up
 - MSI clock keeps power consumption low during active periods
 
+**Note**: The current implementation uses a busy-wait loop for the 50ms activation period. For maximum power efficiency in production code, consider using a hardware timer (e.g., TIM2) to handle the 50ms duration more efficiently.
+
 ## Building
 
 ### Using PlatformIO

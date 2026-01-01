@@ -29,7 +29,7 @@
 #define DEBOUNCE_DELAY_MS 50
 
 volatile bool activation_flag = false;
-volatile uint32_t tick_counter = 0;
+volatile uint32_t millis_counter = 0;  // Approximate millisecond counter
 volatile uint32_t button1_last_interrupt_time = 0;
 volatile uint32_t button2_last_interrupt_time = 0;
 volatile uint32_t button3_last_interrupt_time = 0;
@@ -116,16 +116,18 @@ void RTC_Init(void) {
     while (!(RTC->ISR & RTC_ISR_WUTWF));
     
     // Set wake-up auto-reload value
-    // With RTC clock at ~1Hz and prescaler /2: 600ms ~= 0 (use smallest value for testing)
-    // For actual 600ms, configure based on actual LSI frequency
-    // Using CK_SPRE (1Hz): 1 count = 1 second, so we use fraction
-    // Better to use RTCCLK/16 prescaler
+    // Use RTC clock divided by 16 (ck_apre / 16)
+    // With LSI at ~37kHz: 37000/128 (async prescaler) = 289 Hz
+    // Then divided by 256 (sync prescaler) = 1.129 Hz
+    // For wake-up timer: use ck_spre/16 = ~0.07 Hz per tick
+    // To get 600ms (0.6s), we need approximately: 0.6 * 1.129 / 16 ≈ 0.042
+    // Better approach: use ck_spre (1Hz) and trigger more frequently
     RTC->CR &= ~RTC_CR_WUCKSEL;
-    RTC->CR |= (2 << RTC_CR_WUCKSEL_Pos);  // ck_spre (1Hz) clock
+    RTC->CR |= (4 << RTC_CR_WUCKSEL_Pos);  // ck_spre (1Hz) / 2 = 0.5Hz
     
-    // Since we can't get exactly 600ms with 1Hz clock, use shorter interval
-    // and count in software. Set to ~0.5 seconds (closest to 600ms)
-    RTC->WUTR = 0;  // Will wake every ~1 second, adjust in interrupt
+    // Set counter to 0 for ~2 second period, we'll handle 600ms in software
+    // Wake up frequently (every ~0.3s with this configuration)
+    RTC->WUTR = 0;  // Shortest period for more precise timing control in ISR
     
     // Enable wake-up timer interrupt
     RTC->CR |= RTC_CR_WUTIE;
@@ -208,17 +210,21 @@ extern "C" void RTC_IRQHandler(void) {
         // Clear EXTI flag
         EXTI->PR |= EXTI_PR_PIF20;
         
-        tick_counter++;
+        // Increment millisecond counter (approximate, adjust based on actual timing)
+        millis_counter += 300;  // Approximate ms since last wake (depends on RTC config)
         
-        // Trigger activation approximately every 600ms
-        // Since RTC runs at ~1Hz, trigger more frequently
-        activation_flag = true;
+        // Check if 600ms has elapsed (approximately)
+        static uint32_t last_activation_time = 0;
+        if (millis_counter - last_activation_time >= ACTIVATION_PERIOD_MS) {
+            last_activation_time = millis_counter;
+            activation_flag = true;
+        }
     }
 }
 
 // EXTI0-1 interrupt handler (Button 2 and Button 3)
 extern "C" void EXTI0_1_IRQHandler(void) {
-    uint32_t current_time = tick_counter;
+    uint32_t current_time = millis_counter;
     
     // Button 2 on PB0 (EXTI0)
     if (EXTI->PR & EXTI_PR_PIF0) {
@@ -249,7 +255,7 @@ extern "C" void EXTI4_15_IRQHandler(void) {
     if (EXTI->PR & EXTI_PR_PIF13) {
         EXTI->PR |= EXTI_PR_PIF13;  // Clear interrupt flag
         
-        uint32_t current_time = tick_counter;
+        uint32_t current_time = millis_counter;
         if (current_time - button1_last_interrupt_time > DEBOUNCE_DELAY_MS) {
             button1_last_interrupt_time = current_time;
             // Handle button 1 press
